@@ -6,6 +6,8 @@ use super::{errors::ChipErrors, opcode::Opcode};
 
 pub const CHIP8_WIDTH: usize = 64;
 pub const CHIP8_HEIGHT: usize = 32;
+const START_ADDRESS: usize = 512;
+const FONT_START_ADDRESS: usize = 0x50;
 
 pub struct Chip8 {
     pc: u16,
@@ -32,15 +34,15 @@ impl Chip8 {
     pub fn new(program: Vec<u8>) -> Self {
         let mut memory = [0; 4096];
         for i in 0..FONT.len() {
-            memory[i] = FONT[i];
+            memory[FONT_START_ADDRESS + i] = FONT[i];
         }
 
         for i in 0..program.len() {
-            memory[512 + i] = program[i];
+            memory[START_ADDRESS + i] = program[i];
         }
 
         Chip8 {
-            pc: 0x200,
+            pc: START_ADDRESS as u16,
             opcode: 0,
             I: 0,
             sp: 0,
@@ -77,18 +79,6 @@ impl Chip8 {
         let operation = Opcode::parse(self.opcode)?;
         let mut draw_update = false;
 
-        if self.delay_timer > 0 {
-            self.delay_timer -= 1;
-        }
-
-        if self.sound_timer > 0 {
-            self.sound_timer -= 1;
-
-            if self.sound_timer == 0 {
-                println!("BEEP");
-            }
-        }
-
         match operation {
             Opcode::SetI(value) => {
                 println!("Set I to {:03x}", value);
@@ -117,12 +107,12 @@ impl Chip8 {
             }
             Opcode::ShiftLeft(x) => {
                 self.V[0xF] = (self.V[x as usize] & 0b10000000) >> 7;
-                self.V[x as usize] = self.V[x as usize].wrapping_shl(1);
+                self.V[x as usize] = self.V[x as usize] << 1;
                 self.pc += 2;
             }
             Opcode::ShiftRight(x) => {
                 self.V[0xF] = self.V[x as usize] & 0b1;
-                self.V[x as usize] = self.V[x as usize].wrapping_shr(1);
+                self.V[x as usize] = self.V[x as usize] >> 1;
                 self.pc += 2;
             }
             Opcode::SetDelayTimer(x) => {
@@ -142,7 +132,7 @@ impl Chip8 {
                 self.pc += 2;
             }
             Opcode::SpriteAddress(x) => {
-                self.I = self.V[x as usize] as u16 * 5;
+                self.I = FONT_START_ADDRESS as u16 + self.V[x as usize] as u16 * 5;
                 self.pc += 2;
             }
             Opcode::GetKey(x) => {
@@ -196,8 +186,7 @@ impl Chip8 {
                 self.pc += 2;
             }
             Opcode::AddConstant(x, n) => {
-                let total = self.V[x as usize] as u16 + n as u16;
-                self.V[x as usize] = (total & 0xFF) as u8;
+                self.V[x as usize] = self.V[x as usize].wrapping_add(n);
                 self.pc += 2;
             }
             Opcode::RandAnd(x, n) => {
@@ -209,7 +198,12 @@ impl Chip8 {
                 self.pc += 2;
             }
             Opcode::AddMemory(x) => {
+                println!(
+                    "AddMemory x={:02x}. Before Vx={:02x}, I={:04x}",
+                    x, self.V[x as usize], self.I
+                );
                 self.I += self.V[x as usize] as u16;
+                println!("After I={:04x}", self.I);
                 self.pc += 2;
             }
             Opcode::Jump(addr) => {
@@ -220,7 +214,7 @@ impl Chip8 {
             }
             Opcode::BinaryCodedDecimal(x) => {
                 let value = self.V[x as usize];
-                self.memory[self.I as usize] = value / 100;
+                self.memory[self.I as usize] = value / 100 % 10;
                 self.memory[self.I as usize + 1] = value / 10 % 10;
                 self.memory[self.I as usize + 2] = value % 10;
                 self.pc += 2;
@@ -253,15 +247,39 @@ impl Chip8 {
 
                 self.pc += 2;
             }
+            Opcode::SkipKeyEqual(x) => {
+                if let Some(key) = keyboard.get_pressed_key() {
+                    if key == self.V[x as usize] {
+                        self.pc += 2;
+                    }
+                }
+
+                self.pc += 2;
+            }
+            Opcode::SkipKeyNonEqual(x) => {
+                if let Some(key) = keyboard.get_pressed_key() {
+                    if key != self.V[x as usize] {
+                        self.pc += 2;
+                    }
+                }
+
+                self.pc += 2;
+            }
             Opcode::Draw(x, y, n) => {
+                println!(
+                    "x={:02x}, y={:02x}, n={:02x}, Vx={:02x}, Vy={:02x}",
+                    x, y, n, self.V[x as usize], self.V[y as usize]
+                );
                 self.V[0xF] = 0;
                 for line in 0..n {
                     let pixel = self.memory[(self.I + line as u16) as usize];
 
                     for column in 0..8 {
                         if (pixel & (0x80 >> column)) != 0 {
-                            let x = (self.V[x as usize] + column) as usize;
-                            let y = (self.V[y as usize] + line) as usize;
+                            let x = (self.V[x as usize] as usize + column as usize) as usize
+                                % CHIP8_WIDTH;
+                            let y = (self.V[y as usize] as usize + line as usize) as usize
+                                % CHIP8_HEIGHT;
                             if self.gfx[y][x] == 1 {
                                 self.V[0xF] = 1;
                             }
@@ -272,6 +290,18 @@ impl Chip8 {
 
                 self.pc += 2;
                 draw_update = true;
+            }
+        }
+
+        if self.delay_timer > 0 {
+            self.delay_timer -= 1;
+        }
+
+        if self.sound_timer > 0 {
+            self.sound_timer -= 1;
+
+            if self.sound_timer == 0 {
+                println!("BEEP");
             }
         }
 

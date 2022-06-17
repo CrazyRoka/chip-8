@@ -21,6 +21,8 @@ pub enum Opcode {
     SkipRegistersNonEqual(u8, u8),
     SkipEqual(u8, u8),
     SkipNonEqual(u8, u8),
+    SkipKeyEqual(u8),
+    SkipKeyNonEqual(u8),
     Draw(u8, u8, u8),
     Jump(u16),
     JumpPlus(u16),
@@ -133,6 +135,12 @@ impl Opcode {
         } else if code & 0xF0FF == 0xF00A {
             let x = ((code & 0x0F00) >> 8) as u8;
             return Ok(Self::GetKey(x));
+        } else if code & 0xF0FF == 0xE09E {
+            let x = ((code & 0x0F00) >> 8) as u8;
+            return Ok(Self::SkipKeyEqual(x));
+        } else if code & 0xF0FF == 0xE0A1 {
+            let x = ((code & 0x0F00) >> 8) as u8;
+            return Ok(Self::SkipKeyNonEqual(x));
         } else if code & 0xF00F == 0x5000 {
             let x = ((code & 0x0F00) >> 8) as u8;
             let y = ((code & 0x00F0) >> 4) as u8;
